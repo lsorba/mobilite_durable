@@ -1,0 +1,51 @@
+[project]
+    name = "MDM"
+    version="1.0.0"
+    description="Outil de récupération et de traitement des données libres de transport en commun"
+    readme="README.md"
+    requires-python=">=3.13"
+dependencies = [
+    "aiofiles>=24.1.0",
+    "curl-cffi>=0.11.1",
+    "gtfs-kit>=10.3.0",
+    "jupyter>=1.1.1",
+    "pytest>=8.3.5",
+    "tqdm>=4.67.1",
+]
+
+[tool.pyright]
+    ignore = [".venv/"]
+    venv = "./.venv"
+    venvPath = "."
+    pythonVersion = "3.13"
+    # typeCheckingMode = "basic"
+    reportMissingTypeStubs = false
+    reportMissingImports = false
+    reportIncompatibleMethodOverride = false
+
+[tool.ruff]
+    exclude = [".venv/"]
+    line-length = 96
+    include = ["**/pyproject.toml", "*.py"]
+    extend-exclude = [
+        "__pycache__",
+        ".venv"
+    ]
+    target-version = "py313"
+
+[tool.ruff.lint]
+    # https://docs.astral.sh/ruff/rules
+    select = ["F", "I", "E", "B"]
+    ignore = ["E501"]
+
+[tool.ruff.lint.isort]
+    length-sort = false
+    force-single-line = false
+    known-first-party = ["back"]
+    section-order = ["future", "standard-library", "third-party", "first-party", "local-folder"]
+
+[tool.ruff.format]
+    quote-style = "double"
+    indent-style = "space"
+    skip-magic-trailing-comma = false
+    line-ending = "auto"
