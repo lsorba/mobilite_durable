@@ -41,7 +41,7 @@ dependencies = [
 [tool.ruff.lint.isort]
     length-sort = false
     force-single-line = false
-    known-first-party = ["back"]
+    known-first-party = ["src"]
     section-order = ["future", "standard-library", "third-party", "first-party", "local-folder"]
 
 [tool.ruff.format]
