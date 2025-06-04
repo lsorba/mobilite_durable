@@ -21,7 +21,8 @@ Spécial remerciement :
 
 ## Générer l'environnement virtuel
 ```sh
-uv sync
+uv pip install -r requirements.txt
+uv pip install ".[dev,test]"
 ```
 
 ## Activer l'environnement vituel
