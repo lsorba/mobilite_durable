@@ -172,3 +172,8 @@ cython_debug/
 
 # PyPI configuration file
 .pypirc
+
+src/data/transportdatagouv/
+errors.jsonl
+errors.log
+src/data/**/*_output.*
