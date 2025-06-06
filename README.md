@@ -25,7 +25,7 @@ uv sync
 uv pip install ".[dev,test]"
 ```
 
-## Activer l'environnement vituel
+## Activer l'environnement virtuel
 ```sh
 source .venv/bin/activate
 ```
