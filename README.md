@@ -67,3 +67,13 @@ pre-commit install
 - …
 
 
+## Repère géospatial
+
+Le repère géospatial par défaut du projet est
+> EPSG:3857
+
+C'est lui que l'on doit trouver dans les différents jeux de données.
+Celui-ci est optimisé pour la visualisation des données sur écran.
+
+Lors des calculs géospatiaux, ce repère est source d'erreur, dans ce cas, on utilise le 
+> EPSG:4326
