@@ -21,12 +21,12 @@ Pour faciliter la collaboration et le suivi des modifications, les notebooks doi
 ```
 <date>_<auteur>_<feature>.ipynb
 ```
-- `date` : au format `DD-MM-YYYY` (exemple `19-06-2025`)
+- `date` : au format `YYYY-MM-DD` (exemple `2025-06-19`)
 - `auteur` : prénom ou identifiant Git (exemple `AReboud`)
 - `feature` : description courte (exemple `EPSG`)
 
 ```
-19-06-2025_AReboud_EPSG.ipynb
+2025-06-19_AReboud_EPSG.ipynb
 ```
 
 ## Installation
