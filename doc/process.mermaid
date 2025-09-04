@@ -10,39 +10,37 @@ flowchart TD
         PF_TDG -->|"`__transportdatagouv.py__
                     Récupère les GTFS`"| FE_TDG("`Extraction,
                     filtrage`")
+        SOURCE_TRANSIT>transit] --> PFE_TRANSIT("`Extraction`")
         SOURCE_OSM>openstreetmap] --> PFE_OSM("`Pipeline,
                     filtrage,
                     extraction`")
-        SOURCE_C2C>camp2camp] --> PFE_C2C("`Pipeline
-                    filtrage,
-                    extraction`")
+        SOURCE_C2C>camp2camp] --> PFE_C2C("`Extraction BDD`")
+
+
 
         FE_TDG -->|"`__gtf_extractor.py__
-                    Extrait les arrêts et lignes`"| CSV_TDG[(CSV)]
-        FE_TDG -->|"`__gtf_extractor.py__
-                    Extrait les arrêts et lignes`"| GJS_TDG[("`Geo
-                    JSON`")]
-        PFE_OSM --> CSV_OSM[(CSV)]
-        PFE_OSM --> GJS_OSM[("`Geo
-                    JSON`")]
-        PFE_C2C --> CSV_C2C[(CSV)]
-        PFE_C2C --> GJS_C2C[("`Geo
-                    JSON`")]
-        CSV_TDG --> ANALYSE{"`Analyse
+                    Extrait les arrêts et lignes`"| EXPORT_TDG[("`CSV
+                    GeoJSON`")]
+        PFE_TRANSIT --> EXPORT_TRANSIT[("`...`")]
+        PFE_OSM --> EXPORT_OSM[("`CSV
+                    GeoJSON`")]
+        PFE_C2C --> EXPORT_C2C[("`CSV
+                    GeoJSON`")]
+        EXPORT_TDG --> ANALYSE{"`Analyse
                     des données`"}
-        GJS_TDG --> ANALYSE
-        CSV_OSM --> ANALYSE
-        GJS_OSM --> ANALYSE
-        CSV_C2C --> ANALYSE
-        GJS_C2C --> ANALYSE
-        ANALYSE -->|1| IDENTIFIER["`**Identifier**
+        EXPORT_TRANSIT -.-> ANALYSE
+        EXPORT_OSM --> ANALYSE
+        EXPORT_C2C --> ANALYSE
+
+
+        ANALYSE --> IDENTIFIER["`**Identifier**
                     les données de
                     transport manquantes`"]
-        ANALYSE -->|2| REPERER["`**Repérer**
+        ANALYSE --> REPERER["`**Repérer**
                     les topos C2C
                     non accessibles
                     en transports en commun`"]
-        ANALYSE -->|3| ENRICHIR["`**Enrichir**
+        ANALYSE --> ENRICHIR["`**Enrichir**
                     les données`"]
         IDENTIFIER --> ARRETS_MANQUANTS["`fa:fa-bus Arrêts de bus
                     manquants`"]
@@ -60,22 +58,23 @@ flowchart TD
         style SOURCE_TDG fill:#f96
         style SOURCE_OSM fill:#f96
         style SOURCE_C2C fill:#f96
+        style SOURCE_TRANSIT fill:#f96
 
     %% TODO
         style PFE_OSM stroke:#f00,stroke-width:2px,stroke-dasharray: 5 5
         style PFE_C2C stroke:#f00,stroke-width:2px,stroke-dasharray: 5 5
         style LIGNES_MANQUANTES stroke:#f00,stroke-width:2px,stroke-dasharray: 5 5
-        style CSV_OSM stroke:#f00,stroke-width:2px,stroke-dasharray: 5 5
-        style GJS_OSM stroke:#f00,stroke-width:2px,stroke-dasharray: 5 5
-        style CSV_C2C stroke:#f00,stroke-width:2px,stroke-dasharray: 5 5
-        style GJS_C2C stroke:#f00,stroke-width:2px,stroke-dasharray: 5 5
+        style EXPORT_OSM stroke:#f00,stroke-width:2px,stroke-dasharray: 5 5
+        style EXPORT_C2C stroke:#f00,stroke-width:2px,stroke-dasharray: 5 5
+        style EXPORT_C2C stroke:#f00,stroke-width:2px,stroke-dasharray: 5 5
+        style EXPORT_TRANSIT stroke:#f00,stroke-width:2px,stroke-dasharray: 5 5
     %% In progress
         style PF_TDG stroke:#00f,stroke-width:2px
         style FE_TDG stroke:#00f,stroke-width:2px
-        style CSV_TDG stroke:#00f,stroke-width:2px
-        style GJS_TDG stroke:#00f,stroke-width:2px
+        style EXPORT_TDG stroke:#00f,stroke-width:2px
         style ARRETS_MANQUANTS stroke:#00f,stroke-width:2px
         style DIFF stroke:#00f,stroke-width:2px
+        style PFE_TRANSIT stroke:#00f,stroke-width:2px
     %% DONE
         %% style PF_TDG fill:#0d0,stroke:#333,stroke-width:4px
     end
