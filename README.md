@@ -29,6 +29,10 @@ Pour faciliter la collaboration et le suivi des modifications, les notebooks doi
 2025-06-19_AReboud_EPSG.ipynb
 ```
 
+## Processus et objectifs
+
+Voir diagramme [Processus et objectifs](docs/process.mermaid)
+
 ## Installation
 
 ### Dépendances

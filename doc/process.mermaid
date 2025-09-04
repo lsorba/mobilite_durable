@@ -1,0 +1,78 @@
+---
+config:
+  theme: 'forest'
+---
+flowchart TD
+    subgraph MDM
+        SOURCE_TDG>transport.data.gouv.fr] --> PF_TDG(Pipeline, \nfiltrage)
+        PF_TDG -->|"`__transportdatagouv.py__
+                    Récupère les GTFS`"| FE_TDG(Extraction, \nfiltrage)
+        SOURCE_OSM>openstreetmap] --> PFE_OSM(Pipeline, \nfiltrage, \nextraction)
+        SOURCE_C2C>camp2camp] --> PFE_C2C(Pipeline, \nfiltrage, \nextraction)
+
+        FE_TDG -->|"`__gtf_extractor.py__
+                    Extrait les arrêts et lignes`"| CSV_TDG[(CSV)]
+        FE_TDG -->|"`__gtf_extractor.py__
+                    Extrait les arrêts et lignes`"| GJS_TDG[(Geo\nJSON)]
+        PFE_OSM --> CSV_OSM[(CSV)]
+        PFE_OSM --> GJS_OSM[(Geo\nJSON)]
+        PFE_C2C --> CSV_C2C[(CSV)]
+        PFE_C2C --> GJS_C2C[(Geo\nJSON)]
+        CSV_TDG --> ANALYSE{Analyse\n des données}
+        GJS_TDG --> ANALYSE
+        CSV_OSM --> ANALYSE
+        GJS_OSM --> ANALYSE
+        CSV_C2C --> ANALYSE
+        GJS_C2C --> ANALYSE
+        ANALYSE -->|1| IDENTIFIER["`**Identifier**
+                        les données de
+                        transport manquantes`"]
+        ANALYSE -->|2| REPERER["`**Repérer**
+                        les topos C2C
+                        non accessibles
+                        en transports en commun`"]
+        ANALYSE -->|3| ENRICHIR["`**Enrichir**
+                        les données`"]
+        IDENTIFIER --> ARRETS_MANQUANTS[fa:fa-bus Arrêts de bus\nmanquants]
+        IDENTIFIER -->|...| LIGNES_MANQUANTES[fa:fa-bus Lignes\nmanquantes]
+        ARRETS_MANQUANTS -->|"`__visualise_stops_diff.py__
+                créé un geoJSON avec un code couleur`"| DIFF[(Geo\nJSON)]
+        ENRICHIR --> PRIX[fa:fa-eur Prix]
+        ENRICHIR --> VELO[fa:fa-bicycle Vélo]
+        ENRICHIR --> SPECIAUX[fa:fa-graduation-cap  Réservé scolaire]
+
+    %% Styling
+        style MDM fill:#fff,stroke:#fff
+        style SOURCE_TDG fill:#f96
+        style SOURCE_OSM fill:#f96
+        style SOURCE_C2C fill:#f96
+
+    %% TODO
+        style PFE_OSM stroke:#f00,stroke-width:2px,stroke-dasharray: 5 5
+        style PFE_C2C stroke:#f00,stroke-width:2px,stroke-dasharray: 5 5
+        style LIGNES_MANQUANTES stroke:#f00,stroke-width:2px,stroke-dasharray: 5 5
+        style CSV_OSM stroke:#f00,stroke-width:2px,stroke-dasharray: 5 5
+        style GJS_OSM stroke:#f00,stroke-width:2px,stroke-dasharray: 5 5
+        style CSV_C2C stroke:#f00,stroke-width:2px,stroke-dasharray: 5 5
+        style GJS_C2C stroke:#f00,stroke-width:2px,stroke-dasharray: 5 5
+    %% In progress
+        style PF_TDG stroke:#00f,stroke-width:2px
+        style FE_TDG stroke:#00f,stroke-width:2px
+        style CSV_TDG stroke:#00f,stroke-width:2px
+        style GJS_TDG stroke:#00f,stroke-width:2px
+        style ARRETS_MANQUANTS stroke:#00f,stroke-width:2px
+        style DIFF stroke:#00f,stroke-width:2px
+    %% DONE
+        %% style PF_TDG fill:#0d0,stroke:#333,stroke-width:4px
+    end
+
+    subgraph Légende
+        style Légende fill:#fff
+        direction LR
+        AFaire --> EnCours --> Fini
+        style AFaire stroke:#f00,stroke-width:2px,stroke-dasharray: 5 5
+        style EnCours stroke:#00f,stroke-width:2px
+        style Fini stroke:#333,stroke-width:4px
+    end
+
+    MDM ~~~ Légende
