@@ -4,6 +4,7 @@ config:
 ---
 flowchart TD
     subgraph MDM
+        direction TB
         SOURCE_TDG>transport.data.gouv.fr] --> PF_TDG(Pipeline, \nfiltrage)
         PF_TDG -->|"`__transportdatagouv.py__
                     Récupère les GTFS`"| FE_TDG(Extraction, \nfiltrage)
@@ -67,8 +68,8 @@ flowchart TD
     end
 
     subgraph Légende
-        style Légende fill:#fff
         direction LR
+        style Légende fill:#fff
         AFaire --> EnCours --> Fini
         style AFaire stroke:#f00,stroke-width:2px,stroke-dasharray: 5 5
         style EnCours stroke:#00f,stroke-width:2px
