@@ -21,12 +21,12 @@ Pour faciliter la collaboration et le suivi des modifications, les notebooks doi
 ```
 <date>_<auteur>_<feature>.ipynb
 ```
-- `date` : au format `DD-MM-YYYY` (exemple `19-06-2025`)
+- `date` : au format `YYYY-MM-DD` (exemple `2025-06-19`)
 - `auteur` : prénom ou identifiant Git (exemple `AReboud`)
 - `feature` : description courte (exemple `EPSG`)
 
 ```
-19-06-2025_AReboud_EPSG.ipynb
+2025-06-19_AReboud_EPSG.ipynb
 ```
 
 ## Installation
@@ -42,9 +42,30 @@ uv sync
 uv pip install ".[dev,test]"
 ```
 
-## Activer l'environnement virtuel
+## [Activer l'environnement virtuel](https://docs.astral.sh/uv/pip/environments/#using-a-virtual-environment)
+
+macOS and Linux:
+
 ```sh
 source .venv/bin/activate
+```
+
+windows:
+
+```sh
+.venv\Scripts\activate
+```
+
+## Exécuter un script
+
+```sh
+python main.py path/to/script.py
+```
+
+ou si on n'a pas activé l'environnement
+
+```sh
+uv run main.py path/to/script.py
 ```
 
 ## Activation du pre-commit
@@ -67,3 +88,13 @@ pre-commit install
 - …
 
 
+## Repère géospatial
+
+Le repère géospatial par défaut du projet est
+> EPSG:3857
+
+C'est lui que l'on doit trouver dans les différents jeux de données.
+Celui-ci est optimisé pour la visualisation des données sur écran.
+
+Lors des calculs géospatiaux, ce repère est source d'erreur, dans ce cas, on utilise le 
+> EPSG:4326
