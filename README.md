@@ -31,7 +31,7 @@ Pour faciliter la collaboration et le suivi des modifications, les notebooks doi
 
 ## Processus et objectifs
 
-Voir diagramme [Processus et objectifs](docs/process.mermaid)
+Voir diagramme [Processus et objectifs](doc/process.mermaid)
 
 ## Installation
 
