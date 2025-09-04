@@ -48,6 +48,23 @@ logger = logging.getLogger(__name__)
 class GTFSExtractor:
     """Base class for GTFS data extraction with common utilities"""
 
+    # Default set of route_type values to exclude across extractors (configurable per instance/class)
+    # https://gtfs.org/documentation/schedule/reference/#routestxt
+    #
+    # route_type Enum Required Indicates the type of transportation used on a route. Valid options are:
+    #
+    #     0 - Tram, Streetcar, Light rail. Any light rail or street level system within a metropolitan area.
+    #     1 - Subway, Metro. Any underground rail system within a metropolitan area.
+    #     2 - Rail. Used for intercity or long-distance travel.
+    #     3 - Bus. Used for short- and long-distance bus routes.
+    #     4 - Ferry. Used for short- and long-distance boat service.
+    #     5 - Cable tram. Used for street-level rail cars where the cable runs beneath the vehicle (e.g., cable car in San Francisco).
+    #     6 - Aerial lift, suspended cable car (e.g., gondola lift, aerial tramway). Cable transport where cabins, cars, gondolas or open chairs are suspended by means of one or more cables.
+    #     7 - Funicular. Any rail system designed for steep inclines.
+    #     11 - Trolleybus. Electric buses that draw power from overhead wires using poles.
+    #     12 - Monorail. Railway in which the track consists of a single rail or a beam.
+    exclude_route_types: set[int] = {2}
+
     def __init__(self, insert_line_info: bool = True):
         self.insert_line_info = insert_line_info
 
@@ -100,7 +117,8 @@ class GTFSExtractor:
     def get_trip_route_mapping(feed) -> pd.DataFrame:
         """Get mapping between trips and routes with line information"""
         trips = feed.trips[["trip_id", "route_id"]]
-        routes = feed.routes[["route_id", "route_short_name", "route_long_name"]]
+        # Include route_type for downstream filtering
+        routes = feed.routes[["route_id", "route_short_name", "route_long_name", "route_type"]]
         return trips.merge(routes, on="route_id", how="left")
 
     @staticmethod
@@ -256,6 +274,11 @@ class GTFSStopsExtractor(GTFSExtractor):
             f"Extracted {len(stops)} stops from agency '{agency_name}' with id: {agency_id}"
         )
 
+        # Check if stops DataFrame is empty
+        if stops.empty:
+            logger.warning(f"No stops found for agency '{agency_name}' with id: {agency_id}")
+            return pd.DataFrame()
+
         # Add agency information
         stops.loc[:, "agency_id"] = agency_id
         stops.loc[:, "agency_name"] = agency_name
@@ -288,6 +311,28 @@ class GTFSStopsExtractor(GTFSExtractor):
         # Get stop_times and merge with trip_route
         stop_times = feed.stop_times[["stop_id", "trip_id"]]
         stop_lines = stop_times.merge(trip_route, on="trip_id", how="left")
+
+        # Exclude lines by route_type if configured
+        try:
+            if (
+                hasattr(self, "exclude_route_types")
+                and self.exclude_route_types
+                and "route_type" in stop_lines.columns
+            ):
+                stop_lines["route_type"] = stop_lines["route_type"].astype("Int64")
+                stop_lines = stop_lines[
+                    ~stop_lines["route_type"].isin(
+                        pd.Series(list(self.exclude_route_types), dtype="Int64")
+                    )
+                ]
+        except Exception as e:
+            logger.warning(f"Failed to filter stop_lines by route_type: {e}")
+
+        if stop_lines.empty:
+            logger.warning(
+                f"Empty stop_lines, excluded route types {self.exclude_route_types} for agency {stops['agency_id'].iloc[0]} with name '{stops['agency_name'].iloc[0]}'"
+            )
+            return pd.DataFrame()
 
         # Remove duplicates to get unique stop-route combinations
         stop_lines = stop_lines.drop_duplicates(subset=["stop_id", "route_id"])
@@ -330,7 +375,7 @@ class GTFSStopsExtractor(GTFSExtractor):
             feed = gk.read_feed(gtfs_path, dist_units="km")
             feed = gk.clean(feed)
         except Exception as e:
-            logger.error(f"Error reading GTFS file {gtfs_path}: {e}")
+            logger.error(f"Error reading GTFS file {gtfs_path}: {type(e).__name__} {str(e)}")
             return pd.DataFrame()
 
         agencies = extractor.get_agencies(feed)
@@ -364,6 +409,23 @@ class GTFSStopsExtractor(GTFSExtractor):
 
 class GTFSLinesExtractor(GTFSExtractor):
     """Extractor for GTFS lines with geometry and stop information"""
+
+    # Set of GTFS route_type values to exclude (e.g., 2 = Rail). Can be overridden per instance.
+    # https://gtfs.org/documentation/schedule/reference/#routestxt
+    #
+    # route_type Enum Required Indicates the type of transportation used on a route. Valid options are:
+    #
+    #     0 - Tram, Streetcar, Light rail. Any light rail or street level system within a metropolitan area.
+    #     1 - Subway, Metro. Any underground rail system within a metropolitan area.
+    #     2 - Rail. Used for intercity or long-distance travel.
+    #     3 - Bus. Used for short- and long-distance bus routes.
+    #     4 - Ferry. Used for short- and long-distance boat service.
+    #     5 - Cable tram. Used for street-level rail cars where the cable runs beneath the vehicle (e.g., cable car in San Francisco).
+    #     6 - Aerial lift, suspended cable car (e.g., gondola lift, aerial tramway). Cable transport where cabins, cars, gondolas or open chairs are suspended by means of one or more cables.
+    #     7 - Funicular. Any rail system designed for steep inclines.
+    #     11 - Trolleybus. Electric buses that draw power from overhead wires using poles.
+    #     12 - Monorail. Railway in which the track consists of a single rail or a beam.
+    exclude_route_types: set[int] = {2}
 
     lines_cols = [
         "line_unique_id",
@@ -405,6 +467,27 @@ class GTFSLinesExtractor(GTFSExtractor):
         logger.debug(
             f"Extracted {len(routes)} routes from agency '{agency_name}' with id: {agency_id}"
         )
+
+        # Exclude routes by route_type if configured
+        try:
+            if hasattr(self, "exclude_route_types") and self.exclude_route_types:
+                # Ensure numeric comparison; coerce to int where possible
+                routes = routes[
+                    ~routes["route_type"]
+                    .astype("Int64")
+                    .isin(pd.Series(list(self.exclude_route_types), dtype="Int64"))
+                ]
+                logger.debug(
+                    f"After excluding route_types {self.exclude_route_types}, remaining routes: {len(routes)}"
+                )
+        except Exception as e:
+            logger.warning(f"Failed to filter routes by route_type: {e}")
+
+        if routes.empty:
+            logger.warning(
+                f"Empty routes, excluded route types {self.exclude_route_types} for agency {agency_id} with name '{agency_name}'"
+            )
+            return pd.DataFrame()
 
         # Add agency information
         routes.loc[:, "agency_id"] = agency_id
@@ -654,13 +737,15 @@ def main(**kwargs):
     output_file_lines_geojson = input_dir / f"{current_date}_all_lines.geojson"
 
     # Extract stops from a folder containing multiple GTFS files
+    # stops_df = extract_gtfs_stops(
+    #     str(input_dir), str(output_file_stops_csv), "csv", with_lines=True
+    # )
     stops_df = extract_gtfs_stops(
-        str(input_dir), str(output_file_stops_csv), "csv", with_lines=True
+        str(input_dir), str(output_file_stops_geojson), "geojson", with_lines=True
     )
-    # stops_df = extract_gtfs_stops(str(input_dir), str(output_file_stops_geojson), "geojson", with_lines=True)
 
     # Extract lines from a folder containing multiple GTFS files
-    lines_df = extract_gtfs_lines(str(input_dir), str(output_file_lines_csv), "csv")
+    # lines_df = extract_gtfs_lines(str(input_dir), str(output_file_lines_csv), "csv")
     # lines_df = extract_gtfs_lines(str(input_dir), str(output_file_lines_geojson), "geojson")
 
     # Using class methods directly
