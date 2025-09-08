@@ -84,6 +84,9 @@ pre-commit install
 .venv/bin/jupyter lab
 ```
 
+## Scrapping
+
+Voir le [README du sous-dossier](src/scrapping/README.md).
 
 ## Doc utile
 
