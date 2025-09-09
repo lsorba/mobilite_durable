@@ -20,15 +20,18 @@ Example:
     # Extract stops from a folder containing multiple GTFS files
     stops_df = extract_gtfs_stops(str(input_dir), str(output_file_stops_csv), "csv", with_lines=True)
     stops_df = extract_gtfs_stops(str(input_dir), str(output_file_stops_geojson), "geojson", with_lines=True)
+    extract_gtfs_stops(str(input_dir), str(output_stem), "all", with_lines=True)
 
     # Extract lines from a folder containing multiple GTFS files
     lines_df = extract_gtfs_lines(str(input_dir), str(output_file_lines_csv), "csv")
     lines_df = extract_gtfs_lines(str(input_dir), str(output_file_lines_geojson), "geojson")
+    extract_gtfs_lines(str(input_dir), str(output_stem), "all")
 """
 
 import logging
 import os
 from datetime import datetime
+from enum import IntEnum
 from pathlib import Path
 from typing import Dict, List, Optional, Union
 
@@ -38,15 +41,36 @@ from pyproj import Transformer
 from shapely import Point
 from shapely.geometry import LineString, MultiLineString
 
-from src.settings import DATA_FOLDER
+from src.settings import DATA_FOLDER, EPSG_WEB_MERCATOR, EPSG_WGS84
 from src.utils.logger import setup_logger
 
 # Set up logger
-logger = logging.getLogger(__name__)
+logger = setup_logger(level=logging.DEBUG)
+
+
+class GTFSRouteType(IntEnum):
+    """
+    Enumeration of route types in GTFS according to the official specification
+
+    Reference: https://gtfs.org/documentation/schedule/reference/#routestxt
+    """
+
+    TRAM = 0  # Tram, Streetcar, Light rail
+    SUBWAY = 1  # Subway, Metro
+    RAIL = 2  # Rail (intercity or long-distance travel)
+    BUS = 3  # Bus (short- and long-distance routes)
+    FERRY = 4  # Ferry (boat service)
+    CABLE_TRAM = 5  # Cable tram (street-level rail cars with cable)
+    AERIAL_LIFT = 6  # Aerial lift, suspended cable car
+    FUNICULAR = 7  # Funicular (rail system for steep inclines)
+    TROLLEYBUS = 11  # Trolleybus (electric buses with overhead wires)
+    MONORAIL = 12  # Monorail (single rail or beam track)
 
 
 class GTFSExtractor:
     """Base class for GTFS data extraction with common utilities"""
+
+    exclude_route_types: set[int] = {GTFSRouteType.RAIL}
 
     def __init__(self, insert_line_info: bool = True):
         self.insert_line_info = insert_line_info
@@ -100,7 +124,8 @@ class GTFSExtractor:
     def get_trip_route_mapping(feed) -> pd.DataFrame:
         """Get mapping between trips and routes with line information"""
         trips = feed.trips[["trip_id", "route_id"]]
-        routes = feed.routes[["route_id", "route_short_name", "route_long_name"]]
+        # Include route_type for downstream filtering
+        routes = feed.routes[["route_id", "route_short_name", "route_long_name", "route_type"]]
         return trips.merge(routes, on="route_id", how="left")
 
     @staticmethod
@@ -117,7 +142,7 @@ class GTFSExtractor:
     def transform_to_web_mercator(lon: float, lat: float) -> tuple:
         """Transform WGS84 coordinates to Web Mercator (EPSG:3857)"""
         try:
-            transformer = Transformer.from_crs("EPSG:4326", "EPSG:3857", always_xy=True)
+            transformer = Transformer.from_crs(EPSG_WGS84, EPSG_WEB_MERCATOR, always_xy=True)
             x, y = transformer.transform(lon, lat)
             return x, y
         except Exception as e:
@@ -240,8 +265,11 @@ class GTFSStopsExtractor(GTFSExtractor):
         try:
             feed_for_agency = feed.restrict_to_agencies({agency_id})
         except Exception as e:
-            logger.warning(f"Could not filter feed for agency {agency_id}: {e}")
-            feed_for_agency = feed
+            logger.error(
+                f"Could not filter feed for agency {agency_id}: {e.__class__.__name__}: {e}"
+            )
+            # feed_for_agency = feed
+            return pd.DataFrame()
 
         # Get dynamic columns for stops
         required_cols = ["stop_id", "stop_name", "stop_lat", "stop_lon"]
@@ -255,6 +283,34 @@ class GTFSStopsExtractor(GTFSExtractor):
         logger.debug(
             f"Extracted {len(stops)} stops from agency '{agency_name}' with id: {agency_id}"
         )
+
+        # Filter stops that have routes with excluded route_types BEFORE adding line info
+        if hasattr(self, "exclude_route_types") and self.exclude_route_types:
+            # Get trip-route mapping with route_type
+            trip_route = self.get_trip_route_mapping(feed_for_agency)
+
+            # Get stop_times and merge with trip_route to identify stops with excluded route types
+            stop_times = feed_for_agency.stop_times[["stop_id", "trip_id"]]
+            stop_lines = stop_times.merge(trip_route, on="trip_id", how="left")
+
+            # Find stops that have any route with excluded route_type
+            if "route_type" in stop_lines.columns:
+                stop_lines["route_type"] = stop_lines["route_type"].astype("Int64")
+                excluded_stops = stop_lines[
+                    stop_lines["route_type"].isin(self.exclude_route_types)
+                ]["stop_id"].unique()
+
+                # Filter out stops that have any excluded route type
+                if len(excluded_stops) > 0:
+                    logger.info(
+                        f"Excluding {len(excluded_stops)} stops with route types {self.exclude_route_types} for agency '{agency_name}' with id: {agency_id}"
+                    )
+                    stops = stops[~stops["stop_id"].isin(excluded_stops)]
+
+        # Check if stops DataFrame is empty
+        if stops.empty:
+            logger.warning(f"No stops found for agency '{agency_name}' with id: {agency_id}")
+            return pd.DataFrame()
 
         # Add agency information
         stops.loc[:, "agency_id"] = agency_id
@@ -330,7 +386,7 @@ class GTFSStopsExtractor(GTFSExtractor):
             feed = gk.read_feed(gtfs_path, dist_units="km")
             feed = gk.clean(feed)
         except Exception as e:
-            logger.error(f"Error reading GTFS file {gtfs_path}: {e}")
+            logger.error(f"Error reading GTFS file {gtfs_path}: {type(e).__name__} {str(e)}")
             return pd.DataFrame()
 
         agencies = extractor.get_agencies(feed)
@@ -405,6 +461,22 @@ class GTFSLinesExtractor(GTFSExtractor):
         logger.debug(
             f"Extracted {len(routes)} routes from agency '{agency_name}' with id: {agency_id}"
         )
+
+        # Exclude routes by route_type if configured
+        if hasattr(self, "exclude_route_types") and self.exclude_route_types:
+            # Ensure numeric comparison; coerce to int where possible
+            routes = routes[
+                ~routes["route_type"].astype("Int64").isin(self.exclude_route_types)
+            ]
+            logger.debug(
+                f"After excluding route_types {self.exclude_route_types}, remaining routes: {len(routes)} from agency '{agency_name}' with id: {agency_id}"
+            )
+
+        if routes.empty:
+            logger.warning(
+                f"Empty routes, excluded route types {self.exclude_route_types} for agency {agency_id} with name '{agency_name}'"
+            )
+            return pd.DataFrame()
 
         # Add agency information
         routes.loc[:, "agency_id"] = agency_id
@@ -581,7 +653,7 @@ class GTFSExporter:
         df: pd.DataFrame,
         output_path: str,
         geometry_col: str = "geometry",
-        crs: str = "EPSG:3857",
+        crs: str = EPSG_WEB_MERCATOR,
     ):
         """Export DataFrame to GeoJSON"""
         try:
@@ -604,6 +676,34 @@ class GTFSExporter:
         except ImportError:
             logger.error("geopandas not installed, cannot save to GeoJSON")
 
+    @staticmethod
+    def to_parquet(
+        df: pd.DataFrame,
+        output_path: str,
+        geometry_col: str = "geometry",
+        crs: str = EPSG_WEB_MERCATOR,
+    ):
+        """Export DataFrame to GeoParquet"""
+        try:
+            import geopandas as gpd
+
+            # Filter rows with geometry
+            df_with_geometry = df[df[geometry_col].notna()].copy()
+
+            # Create GeoDataFrame
+            gdf = gpd.GeoDataFrame(df_with_geometry, geometry=geometry_col, crs=crs)
+
+            # Handle list columns for GeoJSON
+            for col in gdf.columns:
+                if col != geometry_col and gdf[col].dtype == "object":
+                    gdf[col] = gdf[col].apply(GTFSExtractor.safe_list_to_string)
+
+            gdf.to_parquet(output_path)
+            logger.info(f"Data saved to {output_path}")
+
+        except ImportError:
+            logger.error("geopandas not installed, cannot save to Parquet")
+
 
 # Convenience functions for backward compatibility and easy usage
 def extract_gtfs_stops(
@@ -620,6 +720,12 @@ def extract_gtfs_stops(
             GTFSExporter.to_csv(stops, output_path)
         elif output_format.lower() == "geojson":
             GTFSExporter.to_geojson(stops, output_path)
+        elif output_format.lower() == "parquet":
+            GTFSExporter.to_parquet(stops, output_path)
+        elif output_format.lower() == "all":
+            GTFSExporter.to_csv(stops, os.path.splitext(output_path)[0] + "_stops.csv")
+            GTFSExporter.to_geojson(stops, os.path.splitext(output_path)[0] + "_stops.geojson")
+            GTFSExporter.to_parquet(stops, os.path.splitext(output_path)[0] + "_stops.parquet")
 
     return stops
 
@@ -638,7 +744,11 @@ def extract_gtfs_lines(
             GTFSExporter.to_csv(lines, output_path)
         elif output_format.lower() == "geojson":
             GTFSExporter.to_geojson(lines, output_path)
-
+        elif output_format.lower() == "parquet":
+            GTFSExporter.to_parquet(lines, output_path)
+        elif output_format.lower() == "all":
+            GTFSExporter.to_csv(lines, os.path.splitext(output_path)[0] + "_lines.csv")
+            GTFSExporter.to_geojson(lines, os.path.splitext(output_path)[0] + "_lines.geojson")
     return lines
 
 
@@ -648,20 +758,27 @@ def main(**kwargs):
     # Define paths
     current_date = datetime.now().strftime("%Y-%m-%d")
     input_dir = DATA_FOLDER / "transportdatagouv"
+    output_stem = input_dir / f"{current_date}_all"
     output_file_stops_csv = input_dir / f"{current_date}_all_stops.csv"
     output_file_lines_csv = input_dir / f"{current_date}_all_lines.csv"
     output_file_stops_geojson = input_dir / f"{current_date}_all_stops.geojson"
     output_file_lines_geojson = input_dir / f"{current_date}_all_lines.geojson"
+    output_file_stops_parquet = input_dir / f"{current_date}_all_stops.parquet"
+    output_file_lines_parquet = input_dir / f"{current_date}_all_lines.parquet"
 
     # Extract stops from a folder containing multiple GTFS files
-    stops_df = extract_gtfs_stops(
-        str(input_dir), str(output_file_stops_csv), "csv", with_lines=True
-    )
+    # stops_df = extract_gtfs_stops(
+    #     str(input_dir), str(output_file_stops_csv), "csv", with_lines=True
+    # )
     # stops_df = extract_gtfs_stops(str(input_dir), str(output_file_stops_geojson), "geojson", with_lines=True)
+    # stops_df = extract_gtfs_stops(str(input_dir), str(output_file_stops_parquet), "parquet", with_lines=True)
+    extract_gtfs_stops(str(input_dir), str(output_stem), "all", with_lines=True)
 
     # Extract lines from a folder containing multiple GTFS files
-    lines_df = extract_gtfs_lines(str(input_dir), str(output_file_lines_csv), "csv")
+    # lines_df = extract_gtfs_lines(str(input_dir), str(output_file_lines_csv), "csv")
     # lines_df = extract_gtfs_lines(str(input_dir), str(output_file_lines_geojson), "geojson")
+    # lines_df = extract_gtfs_lines(str(input_dir), str(output_file_lines_parquet), "parquet")
+    extract_gtfs_lines(str(input_dir), str(output_stem), "all")
 
     # Using class methods directly
     # stops_df = GTFSStopsExtractor.extract_from_folder(str(input_dir))
@@ -669,7 +786,5 @@ def main(**kwargs):
 
 
 if __name__ == "__main__":
-    # Set up logger
-    setup_logger(level=logging.DEBUG)
     main()
     pass
