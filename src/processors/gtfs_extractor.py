@@ -31,6 +31,7 @@ Example:
 import logging
 import os
 from datetime import datetime
+from enum import IntEnum
 from pathlib import Path
 from typing import Dict, List, Optional, Union
 
@@ -41,11 +42,30 @@ from pyproj import Transformer
 from shapely import Point
 from shapely.geometry import LineString, MultiLineString
 
-from src.settings import DATA_FOLDER
+from src.settings import DATA_FOLDER, EPSG_WEB_MERCATOR, EPSG_WGS84
 from src.utils.logger import setup_logger
 
 # Set up logger
 logger = setup_logger(level=logging.DEBUG)
+
+
+class GTFSRouteType(IntEnum):
+    """
+    Enumeration of route types in GTFS according to the official specification
+
+    Reference: https://gtfs.org/documentation/schedule/reference/#routestxt
+    """
+
+    TRAM = 0  # Tram, Streetcar, Light rail
+    SUBWAY = 1  # Subway, Metro
+    RAIL = 2  # Rail (intercity or long-distance travel)
+    BUS = 3  # Bus (short- and long-distance routes)
+    FERRY = 4  # Ferry (boat service)
+    CABLE_TRAM = 5  # Cable tram (street-level rail cars with cable)
+    AERIAL_LIFT = 6  # Aerial lift, suspended cable car
+    FUNICULAR = 7  # Funicular (rail system for steep inclines)
+    TROLLEYBUS = 11  # Trolleybus (electric buses with overhead wires)
+    MONORAIL = 12  # Monorail (single rail or beam track)
 
 
 class GTFSExtractor:
@@ -76,24 +96,10 @@ class GTFSExtractor:
         self._cached_area_gdf = None
         # Excluded GTFS route types (e.g., 2 = Rail). If None, default to {2}.
         self.exclude_route_types = (
-            set(exclude_route_types) if exclude_route_types is not None else {2}
+            set(exclude_route_types)
+            if exclude_route_types is not None
+            else {GTFSRouteType.RAIL}
         )
-
-        # Default set of route_type values to exclude across extractors (configurable per instance/class)
-        # https://gtfs.org/documentation/schedule/reference/#routestxt
-        #
-        # route_type Enum Required Indicates the type of transportation used on a route. Valid options are:
-        #
-        #     0 - Tram, Streetcar, Light rail. Any light rail or street level system within a metropolitan area.
-        #     1 - Subway, Metro. Any underground rail system within a metropolitan area.
-        #     2 - Rail. Used for intercity or long-distance travel.
-        #     3 - Bus. Used for short- and long-distance bus routes.
-        #     4 - Ferry. Used for short- and long-distance boat service.
-        #     5 - Cable tram. Used for street-level rail cars where the cable runs beneath the vehicle (e.g., cable car in San Francisco).
-        #     6 - Aerial lift, suspended cable car (e.g., gondola lift, aerial tramway). Cable transport where cabins, cars, gondolas or open chairs are suspended by means of one or more cables.
-        #     7 - Funicular. Any rail system designed for steep inclines.
-        #     11 - Trolleybus. Electric buses that draw power from overhead wires using poles.
-        #     12 - Monorail. Railway in which the track consists of a single rail or a beam.
 
     @staticmethod
     def prepare_feed(feed):
@@ -162,7 +168,7 @@ class GTFSExtractor:
     def transform_to_web_mercator(lon: float, lat: float) -> tuple:
         """Transform WGS84 coordinates to Web Mercator (EPSG:3857)"""
         try:
-            transformer = Transformer.from_crs("EPSG:4326", "EPSG:3857", always_xy=True)
+            transformer = Transformer.from_crs(EPSG_WGS84, EPSG_WEB_MERCATOR, always_xy=True)
             x, y = transformer.transform(lon, lat)
             return x, y
         except Exception as e:
@@ -208,7 +214,7 @@ class GTFSExtractor:
 
         try:
             area_gdf = gpd.read_file(path)
-            area_gdf = area_gdf.set_crs("EPSG:4326", allow_override=True)
+            area_gdf = area_gdf.set_crs(EPSG_WGS84, allow_override=True)
 
             # If a department code was provided, filter matching department
             if self.area and (self.area.isdigit() or self.area in {"2a", "2b"}):
@@ -640,19 +646,14 @@ class GTFSLinesExtractor(GTFSExtractor):
         )
 
         # Exclude routes by route_type if configured
-        try:
-            if hasattr(self, "exclude_route_types") and self.exclude_route_types:
-                # Ensure numeric comparison; coerce to int where possible
-                routes = routes[
-                    ~routes["route_type"]
-                    .astype("Int64")
-                    .isin(pd.Series(list(self.exclude_route_types), dtype="Int64"))
-                ]
-                logger.debug(
-                    f"After excluding route_types {self.exclude_route_types}, remaining routes: {len(routes)} from agency '{agency_name}' with id: {agency_id}"
-                )
-        except Exception as e:
-            logger.warning(f"Failed to filter routes by route_type: {e}")
+        if hasattr(self, "exclude_route_types") and self.exclude_route_types:
+            # Ensure numeric comparison; coerce to int where possible
+            routes = routes[
+                ~routes["route_type"].astype("Int64").isin(self.exclude_route_types)
+            ]
+            logger.debug(
+                f"After excluding route_types {self.exclude_route_types}, remaining routes: {len(routes)} from agency '{agency_name}' with id: {agency_id}"
+            )
 
         if routes.empty:
             logger.warning(
@@ -852,52 +853,44 @@ class GTFSExporter:
         df: pd.DataFrame,
         output_path: str,
         geometry_col: str = "geometry",
-        crs: str = "EPSG:3857",
+        crs: str = EPSG_WEB_MERCATOR,
     ):
         """Export DataFrame to GeoJSON"""
-        try:
-            # Filter rows with geometry
-            df_with_geometry = df[df[geometry_col].notna()].copy()
+        # Filter rows with geometry
+        df_with_geometry = df[df[geometry_col].notna()].copy()
 
-            # Create GeoDataFrame
-            gdf = gpd.GeoDataFrame(df_with_geometry, geometry=geometry_col, crs=crs)
+        # Create GeoDataFrame
+        gdf = gpd.GeoDataFrame(df_with_geometry, geometry=geometry_col, crs=crs)
 
-            # Handle list columns for GeoJSON
-            for col in gdf.columns:
-                if col != geometry_col and gdf[col].dtype == "object":
-                    gdf[col] = gdf[col].apply(GTFSExtractor.safe_list_to_string)
+        # Handle list columns for GeoJSON
+        for col in gdf.columns:
+            if col != geometry_col and gdf[col].dtype == "object":
+                gdf[col] = gdf[col].apply(GTFSExtractor.safe_list_to_string)
 
-            gdf.to_file(output_path, driver="GeoJSON")
-            logger.info(f"Data saved to {output_path}")
-
-        except ImportError:
-            logger.error("geopandas not installed, cannot save to GeoJSON")
+        gdf.to_file(output_path, driver="GeoJSON")
+        logger.info(f"Data saved to {output_path}")
 
     @staticmethod
     def to_parquet(
         df: pd.DataFrame,
         output_path: str,
         geometry_col: str = "geometry",
-        crs: str = "EPSG:3857",
+        crs: str = EPSG_WEB_MERCATOR,
     ):
         """Export DataFrame to GeoParquet"""
-        try:
-            # Filter rows with geometry
-            df_with_geometry = df[df[geometry_col].notna()].copy()
+        # Filter rows with geometry
+        df_with_geometry = df[df[geometry_col].notna()].copy()
 
-            # Create GeoDataFrame
-            gdf = gpd.GeoDataFrame(df_with_geometry, geometry=geometry_col, crs=crs)
+        # Create GeoDataFrame
+        gdf = gpd.GeoDataFrame(df_with_geometry, geometry=geometry_col, crs=crs)
 
-            # Handle list columns for GeoJSON
-            for col in gdf.columns:
-                if col != geometry_col and gdf[col].dtype == "object":
-                    gdf[col] = gdf[col].apply(GTFSExtractor.safe_list_to_string)
+        # Handle list columns for GeoJSON
+        for col in gdf.columns:
+            if col != geometry_col and gdf[col].dtype == "object":
+                gdf[col] = gdf[col].apply(GTFSExtractor.safe_list_to_string)
 
-            gdf.to_parquet(output_path)
-            logger.info(f"Data saved to {output_path}")
-
-        except ImportError:
-            logger.error("geopandas not installed, cannot save to Parquet")
+        gdf.to_parquet(output_path)
+        logger.info(f"Data saved to {output_path}")
 
 
 # Convenience functions for backward compatibility and easy usage
@@ -933,29 +926,40 @@ def extract_gtfs_stops(
 
     current_date = datetime.now().strftime("%Y-%m-%d")
     if output_path and not stops.empty:
-        if output_format.lower() == "csv":
-            GTFSExporter.to_csv(
-                stops,
-                output_path + "/" + f"{current_date}_stops_{area}.{output_format.lower()}",
-            )
-        elif output_format.lower() == "geojson":
-            GTFSExporter.to_geojson(
-                stops,
-                output_path + "/" + f"{current_date}_stops_{area}.{output_format.lower()}",
-            )
-        elif output_format.lower() == "parquet":
-            GTFSExporter.to_parquet(
-                stops,
-                output_path + "/" + f"{current_date}_stops_{area}.{output_format.lower()}",
-            )
-        elif output_format.lower() == "all":
-            GTFSExporter.to_csv(stops, output_path + "/" + f"{current_date}_stops_{area}.csv")
-            GTFSExporter.to_geojson(
-                stops, output_path + "/" + f"{current_date}_stops_{area}.geojson"
-            )
-            GTFSExporter.to_parquet(
-                stops, output_path + "/" + f"{current_date}_stops_{area}.parquet"
-            )
+        fmt = output_format.lower()
+        match fmt:
+            case "csv":
+                GTFSExporter.to_csv(
+                    stops,
+                    output_path + "/" + f"{current_date}_stops_{area}.{fmt}",
+                )
+            case "geojson":
+                GTFSExporter.to_geojson(
+                    stops,
+                    output_path + "/" + f"{current_date}_stops_{area}.{fmt}",
+                )
+            case "parquet":
+                GTFSExporter.to_parquet(
+                    stops,
+                    output_path + "/" + f"{current_date}_stops_{area}.{fmt}",
+                )
+            case "all":
+                GTFSExporter.to_csv(
+                    stops, output_path + "/" + f"{current_date}_stops_{area}.csv"
+                )
+                GTFSExporter.to_geojson(
+                    stops, output_path + "/" + f"{current_date}_stops_{area}.geojson"
+                )
+                GTFSExporter.to_parquet(
+                    stops, output_path + "/" + f"{current_date}_stops_{area}.parquet"
+                )
+            case _:
+                logger.warning(
+                    f"Unknown output_format '{output_format}', defaulting to Parquet"
+                )
+                GTFSExporter.to_parquet(
+                    stops, output_path + "/" + f"{current_date}_stops_{area}.parquet"
+                )
 
     return stops
 
@@ -986,29 +990,41 @@ def extract_gtfs_lines(
 
     current_date = datetime.now().strftime("%Y-%m-%d")
     if output_path and not lines.empty:
-        if output_format.lower() == "csv":
-            GTFSExporter.to_csv(
-                lines,
-                output_path + "/" + f"{current_date}_lines_{area}.{output_format.lower()}",
-            )
-        elif output_format.lower() == "geojson":
-            GTFSExporter.to_geojson(
-                lines,
-                output_path + "/" + f"{current_date}_lines_{area}.{output_format.lower()}",
-            )
-        elif output_format.lower() == "parquet":
-            GTFSExporter.to_parquet(
-                lines,
-                output_path + "/" + f"{current_date}_lines_{area}.{output_format.lower()}",
-            )
-        elif output_format.lower() == "all":
-            GTFSExporter.to_csv(lines, output_path + "/" + f"{current_date}_lines_{area}.csv")
-            GTFSExporter.to_geojson(
-                lines, output_path + "/" + f"{current_date}_lines_{area}.csv"
-            )
-            GTFSExporter.to_parquet(
-                lines, output_path + "/" + f"{current_date}_lines_{area}.parquet"
-            )
+        fmt = output_format.lower()
+        match fmt:
+            case "csv":
+                GTFSExporter.to_csv(
+                    lines,
+                    output_path + "/" + f"{current_date}_lines_{area}.{fmt}",
+                )
+            case "geojson":
+                GTFSExporter.to_geojson(
+                    lines,
+                    output_path + "/" + f"{current_date}_lines_{area}.{fmt}",
+                )
+            case "parquet":
+                GTFSExporter.to_parquet(
+                    lines,
+                    output_path + "/" + f"{current_date}_lines_{area}.{fmt}",
+                )
+            case "all":
+                GTFSExporter.to_csv(
+                    lines, output_path + "/" + f"{current_date}_lines_{area}.csv"
+                )
+                GTFSExporter.to_geojson(
+                    lines, output_path + "/" + f"{current_date}_lines_{area}.csv"
+                )
+                GTFSExporter.to_parquet(
+                    lines, output_path + "/" + f"{current_date}_lines_{area}.parquet"
+                )
+            case _:
+                logger.warning(
+                    f"Unknown output_format '{output_format}', defaulting to Parquet"
+                )
+                GTFSExporter.to_parquet(
+                    lines,
+                    output_path + "/" + f"{current_date}_lines_{area}.parquet",
+                )
     return lines
 
 
@@ -1031,7 +1047,7 @@ def main(**kwargs):
         "parquet",
         with_lines=True,
         area="all",
-        exclude_route_types={2},
+        exclude_route_types={GTFSRouteType.RAIL},
     )
 
     # Extract lines from a folder containing multiple GTFS files
@@ -1039,9 +1055,13 @@ def main(**kwargs):
     # lines_df = extract_gtfs_lines(str(input_dir), str(output_folder), "geojson", area="38")
     # lines_df = extract_gtfs_lines(str(input_dir), str(output_folder), "parquet", area="38")
 
-    # extract_gtfs_lines(str(input_dir), str(output_folder), "geojson", area="38", exclude_route_types={2})
+    # extract_gtfs_lines(str(input_dir), str(output_folder), "geojson", area="38", exclude_route_types={GTFSRouteType.RAIL})
     extract_gtfs_lines(
-        str(input_dir), str(output_folder), "parquet", area="all", exclude_route_types={2}
+        str(input_dir),
+        str(output_folder),
+        "parquet",
+        area="all",
+        exclude_route_types={GTFSRouteType.RAIL},
     )
 
 
