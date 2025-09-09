@@ -447,9 +447,7 @@ class GTFSStopsExtractor(GTFSExtractor):
             if "route_type" in stop_lines.columns:
                 stop_lines["route_type"] = stop_lines["route_type"].astype("Int64")
                 excluded_stops = stop_lines[
-                    stop_lines["route_type"].isin(
-                        pd.Series(list(self.exclude_route_types), dtype="Int64")
-                    )
+                    stop_lines["route_type"].isin(self.exclude_route_types)
                 ]["stop_id"].unique()
 
                 # Filter out stops that have any excluded route type
