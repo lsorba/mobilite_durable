@@ -18,34 +18,37 @@ Classes:
 
 Example:
     # Extract stops from a folder containing multiple GTFS files
-    stops_df = extract_gtfs_stops(str(input_dir), str(output_file_stops_csv), "csv", with_lines=True)
-    stops_df = extract_gtfs_stops(str(input_dir), str(output_file_stops_geojson), "geojson", with_lines=True)
-    extract_gtfs_stops(str(input_dir), str(output_stem), "all", with_lines=True)
+    stops_df = extract_gtfs_stops(str(input_dir), str(output_path), "csv", with_lines=True)
+    stops_df = extract_gtfs_stops(str(input_dir), str(output_path), "geojson", with_lines=True)
+    stops_df = extract_gtfs_stops(str(input_dir), str(output_path), "parquet", with_lines=True)
+    stops_df = extract_gtfs_stops(str(input_dir), str(output_path), "all", with_lines=True)
 
     # Extract lines from a folder containing multiple GTFS files
-    lines_df = extract_gtfs_lines(str(input_dir), str(output_file_lines_csv), "csv")
-    lines_df = extract_gtfs_lines(str(input_dir), str(output_file_lines_geojson), "geojson")
-    extract_gtfs_lines(str(input_dir), str(output_stem), "all")
+    lines_df = extract_gtfs_lines(str(input_dir), str(output_path), "csv")
+    lines_df = extract_gtfs_lines(str(input_dir), str(output_path), "geojson")
+    lines_df = extract_gtfs_lines(str(input_dir), str(output_path), "parquet")
+    lines_df = extract_gtfs_lines(str(input_dir), str(output_path), "all")
 """
 
 import logging
 import os
 from datetime import datetime
 from enum import IntEnum
+from functools import lru_cache
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Dict, List, Optional, Union
 
 import geopandas as gpd
 import gtfs_kit as gk
 import pandas as pd
 from pyproj import Transformer
-from shapely import Point
-from shapely.geometry import LineString, MultiLineString
+from shapely.geometry import LineString, MultiLineString, Point
 
 from src.settings import DATA_FOLDER, EPSG_WEB_MERCATOR, EPSG_WGS84
 from src.utils.logger import setup_logger
 
-# Set up logger
+# Force to DEBUG
 logger = setup_logger(level=logging.DEBUG)
 
 
@@ -89,6 +92,7 @@ class GTFSExtractor:
           * "france" -> use src/data/transportdatagouv/contour-france.geojson
           * any French department code (e.g., "38", "69", "2A", "2B") -> filtered from src/data/transportdatagouv/contour-des-departements.geojson
           * path to a GeoJSON file -> use that polygon/multipolygon
+        - exclude_route_types: set of route types to exclude from the GTFS data.
         """
         self.insert_line_info = insert_line_info
         self.area = (area or "all").lower() if isinstance(area, str) else None
@@ -165,10 +169,10 @@ class GTFSExtractor:
             return str(lst)
 
     @staticmethod
-    def transform_to_web_mercator(lon: float, lat: float) -> tuple:
+    def transform_to_web_mercator(lon: float, lat: float) -> tuple[float, float]:
         """Transform WGS84 coordinates to Web Mercator (EPSG:3857)"""
         try:
-            transformer = Transformer.from_crs(EPSG_WGS84, EPSG_WEB_MERCATOR, always_xy=True)
+            transformer = _get_web_mercator_transformer()
             x, y = transformer.transform(lon, lat)
             return x, y
         except Exception as e:
@@ -236,6 +240,32 @@ class GTFSExtractor:
             logger.error(f"Failed to read area with GeoPandas: {e}")
             return None
 
+    @staticmethod
+    def _build_feed_subset(
+        feed,
+        stops: pd.DataFrame,
+        stop_times: Optional[pd.DataFrame] = None,
+        trips: Optional[pd.DataFrame] = None,
+        routes: Optional[pd.DataFrame] = None,
+    ):
+        """Constructs a pseudo-object feed restricted to the provided data.
+        If stop_times/trips/routes are not provided,
+        they are initialised as empty.
+        """
+        if stop_times is None or trips is None or routes is None:
+            empty = slice(0, 0)
+            stop_times = stop_times if stop_times is not None else feed.stop_times.iloc[empty]
+            trips = trips if trips is not None else feed.trips.iloc[empty]
+            routes = routes if routes is not None else feed.routes.iloc[empty]
+
+        return SimpleNamespace(
+            agency=getattr(feed, "agency", None),
+            stops=stops,
+            stop_times=stop_times,
+            trips=trips,
+            routes=routes,
+        )
+
     def _filter_feed_to_area(self, feed):
         """Restrict a GTFS feed to the selected area polygon.
 
@@ -258,17 +288,7 @@ class GTFSExtractor:
 
         # If no stops remain, return an empty-light feed subset to avoid downstream errors
         if stops.empty:
-            FeedSubset = type("FeedSubset", (object,), {})
-            feed2 = FeedSubset()
-            try:
-                feed2.agency = feed.agency
-            except Exception:
-                feed2.agency = None
-            feed2.stops = stops
-            feed2.stop_times = feed.stop_times.iloc[0:0]
-            feed2.trips = feed.trips.iloc[0:0]
-            feed2.routes = feed.routes.iloc[0:0]
-            return feed2
+            return GTFSExtractor._build_feed_subset(stops)
 
         # Filter stop_times
         stop_times = feed.stop_times[feed.stop_times["stop_id"].isin(stops["stop_id"])].copy()
@@ -280,18 +300,7 @@ class GTFSExtractor:
         routes = feed.routes[feed.routes["route_id"].isin(trips["route_id"].unique())].copy()
 
         # Build a lightweight feed-like object without relying on .copy()
-        FeedSubset = type("FeedSubset", (object,), {})
-        feed2 = FeedSubset()
-        # Preserve agency table to keep agency_id/name visibility
-        try:
-            feed2.agency = feed.agency
-        except Exception:
-            feed2.agency = None
-        feed2.stops = stops
-        feed2.stop_times = stop_times
-        feed2.trips = trips
-        feed2.routes = routes
-        return feed2
+        return GTFSExtractor._build_feed_subset(feed, stops, stop_times, trips, routes)
 
     @staticmethod
     def find_gtfs_files(folder_path: str) -> List[str]:
@@ -541,6 +550,7 @@ class GTFSStopsExtractor(GTFSExtractor):
         - gtfs_path: path to GTFS zip or folder
         - with_lines: include line info per stop
         - area: geographic filter selector or path (see GTFSExtractor.__init__)
+        - exclude_route_types: exclude route types (see GTFSExtractor.__init__)
         """
         extractor = cls(
             insert_line_info=with_lines, area=area, exclude_route_types=exclude_route_types
@@ -775,6 +785,7 @@ class GTFSLinesExtractor(GTFSExtractor):
         Parameters
         - gtfs_path: path to GTFS zip or folder
         - area: geographic filter selector or path (see GTFSExtractor.__init__)
+        - exclude_route_types: exclude lines by route type if configured
         """
         extractor = cls(area=area, exclude_route_types=exclude_route_types)
 
@@ -865,7 +876,7 @@ class GTFSExporter:
             if col != geometry_col and gdf[col].dtype == "object":
                 gdf[col] = gdf[col].apply(GTFSExtractor.safe_list_to_string)
 
-        gdf.to_file(output_path, driver="GeoJSON")
+        gdf.to_file(Path(output_path), driver="GeoJSON")
         logger.info(f"Data saved to {output_path}")
 
     @staticmethod
@@ -887,15 +898,21 @@ class GTFSExporter:
             if col != geometry_col and gdf[col].dtype == "object":
                 gdf[col] = gdf[col].apply(GTFSExtractor.safe_list_to_string)
 
-        gdf.to_parquet(output_path)
+        gdf.to_parquet(Path(output_path))
         logger.info(f"Data saved to {output_path}")
+
+
+@lru_cache(maxsize=1)
+def _get_web_mercator_transformer() -> Transformer:
+    """Retourne un Transformer WGS84 -> Web Mercator mis en cache (créé une seule fois)."""
+    return Transformer.from_crs(EPSG_WGS84, EPSG_WEB_MERCATOR, always_xy=True)
 
 
 # Convenience functions for backward compatibility and easy usage
 def extract_gtfs_stops(
     gtfs_path: str,
     output_path: str = None,
-    output_format: str = "csv",
+    output_format: str = "parquet",
     with_lines: bool = True,
     area: Optional[str] = None,
     exclude_route_types: Optional[set[int]] = None,
@@ -912,6 +929,7 @@ def extract_gtfs_stops(
       * "france" -> use src/data/transportdatagouv/contour-france.geojson
       * any French department code (e.g., "38", "69", "2A", "2B") -> filtered from src/data/transportdatagouv/contour-des-departements.geojson
       * any file path to a GeoJSON containing a Polygon/MultiPolygon
+    - exclude_route_types: list of route types to exclude from export
     """
     if os.path.isdir(gtfs_path):
         stops = GTFSStopsExtractor.extract_from_folder(
@@ -965,7 +983,7 @@ def extract_gtfs_stops(
 def extract_gtfs_lines(
     gtfs_path: str,
     output_path: str = None,
-    output_format: str = "csv",
+    output_format: str = "parquet",
     area: Optional[str] = None,
     exclude_route_types: Optional[set[int]] = None,
 ) -> pd.DataFrame:
@@ -976,6 +994,7 @@ def extract_gtfs_lines(
     - output_path: optional output path (without extension if output_format="all")
     - output_format: csv|geojson|parquet|all
     - area: geographic filter selector or path (see extract_gtfs_stops docstring)
+    - exclude_route_types: list of route types to exclude from export
     """
     if os.path.isdir(gtfs_path):
         lines = GTFSLinesExtractor.extract_from_folder(
@@ -1010,7 +1029,7 @@ def extract_gtfs_lines(
                     lines, output_path + "/" + f"{current_date}_lines_{area}.csv"
                 )
                 GTFSExporter.to_geojson(
-                    lines, output_path + "/" + f"{current_date}_lines_{area}.csv"
+                    lines, output_path + "/" + f"{current_date}_lines_{area}.geojson"
                 )
                 GTFSExporter.to_parquet(
                     lines, output_path + "/" + f"{current_date}_lines_{area}.parquet"
@@ -1065,4 +1084,3 @@ def main(**kwargs):
 
 if __name__ == "__main__":
     main()
-    pass
