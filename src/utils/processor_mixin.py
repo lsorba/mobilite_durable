@@ -43,22 +43,25 @@ class ProcessorMixin:
                 content = cls.fetch_from_api()
                 if cls.input_file:
                     cls.save(content, cls.input_file)
-                return content
+                return fetch_from_loaded_input_file(content)
+
+        def fetch_from_loaded_input_file(content):
+            processed = cls.pre_process(content)
+            if cls.output_file:
+                cls.save(processed, cls.output_file)
+            return processed
 
         def fetch_from_input_file():
             if cls.input_file and cls.input_file.exists():
                 content = cls.fetch_from_file(cls.input_file)
-                processed = cls.pre_process(content)
-                if cls.output_file:
-                    cls.save(processed, cls.output_file)
-                return processed
+                return fetch_from_loaded_input_file(content)
 
         def fetch_from_output_file():
             if cls.output_file and cls.output_file.exists():
                 return cls.fetch_from_file(cls.output_file)
 
         methods = [fetch_from_api, fetch_from_input_file, fetch_from_output_file]
-        if reload_pipeline is True:
+        if not reload_pipeline:
             methods = methods[::-1]
 
         for method in methods:
