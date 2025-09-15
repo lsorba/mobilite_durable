@@ -102,7 +102,7 @@ class GTFSExtractor:
         self.exclude_route_types = exclude_route_types
 
     @staticmethod
-    def prepare_feed(feed):
+    def prepare_feed(feed: gk.Feed) -> gk.Feed:
         """Prepare GTFS feed by adding missing optional columns"""
         # Handle missing columns in stops
         if "parent_station" not in feed.stops.columns:
@@ -123,7 +123,7 @@ class GTFSExtractor:
         return feed
 
     @staticmethod
-    def get_agencies(feed) -> List[Dict]:
+    def get_agencies(feed: gk.Feed) -> List[Dict]:
         """Get list of agencies from feed"""
         if feed.agency is not None and not feed.agency.empty:
             return feed.agency[["agency_id", "agency_name"]].to_dict("records")
@@ -147,7 +147,7 @@ class GTFSExtractor:
         return f"{agency_id}_{item_id}"
 
     @staticmethod
-    def get_trip_route_mapping(feed) -> pd.DataFrame:
+    def get_trip_route_mapping(feed: gk.Feed) -> pd.DataFrame:
         """Get mapping between trips and routes with line information"""
         trips = feed.trips[["trip_id", "route_id"]]
         # Include route_type for downstream filtering
@@ -185,7 +185,7 @@ class GTFSExtractor:
             return pd.DataFrame()
 
     # ----------------- Geographic filtering helpers -----------------
-    def _load_area_gdf(self):
+    def _load_area_gdf(self) -> Optional[gpd.GeoDataFrame]:
         """Create a GeoDataFrame for the selected area in EPSG:4326 using GeoPandas.
 
         No fallback: if the file cannot be read or the department cannot be found, return None.
@@ -262,7 +262,7 @@ class GTFSExtractor:
             routes=routes,
         )
 
-    def _filter_feed_to_area(self, feed):
+    def _filter_feed_to_area(self, feed: gk.Feed) -> gk.Feed:
         """Restrict a GTFS feed to the selected area polygon.
 
         Strategy:
@@ -395,7 +395,7 @@ class GTFSStopsExtractor(GTFSExtractor):
         "geometry",
     ]
 
-    def extract_stops(self, agency_id: str, agency_name: str, feed) -> pd.DataFrame:
+    def extract_stops(self, agency_id: str, agency_name: str, feed: gk.Feed) -> pd.DataFrame:
         """Extract stops for a specific agency with optional line information
 
         If an area GeoJSON is provided via `self.area`, the feed is first restricted to that area.
@@ -490,7 +490,7 @@ class GTFSStopsExtractor(GTFSExtractor):
 
         return stops
 
-    def _add_line_info_to_stops(self, stops: pd.DataFrame, feed) -> pd.DataFrame:
+    def _add_line_info_to_stops(self, stops: pd.DataFrame, feed: gk.Feed) -> pd.DataFrame:
         """Add line information to stops"""
 
         # Get trip-route mapping
@@ -614,7 +614,7 @@ class GTFSLinesExtractor(GTFSExtractor):
         "stop_count",
     ]
 
-    def extract_lines(self, agency_id: str, agency_name: str, feed) -> pd.DataFrame:
+    def extract_lines(self, agency_id: str, agency_name: str, feed: gk.Feed) -> pd.DataFrame:
         """Extract lines for a specific agency with coordinates and stop information
 
         If an area GeoJSON is provided via `self.area`, the feed is first restricted to that area.
@@ -685,7 +685,7 @@ class GTFSLinesExtractor(GTFSExtractor):
 
         return lines_df
 
-    def _process_route_geometry(self, route: pd.Series, feed) -> Optional[Dict]:
+    def _process_route_geometry(self, route: pd.Series, feed: gk.Feed) -> Optional[Dict]:
         """Process a single route to extract geometry and stop information"""
         route_id = route["route_id"]
 
