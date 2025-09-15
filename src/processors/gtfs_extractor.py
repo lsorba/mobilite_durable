@@ -210,7 +210,7 @@ class GTFSExtractor:
             logger.warning(
                 f"Area GeoJSON not found: {path}. No geographic filtering will be applied."
             )
-            exit()
+            return None
 
         try:
             area_gdf = gpd.read_file(path)
@@ -751,13 +751,13 @@ class GTFSLinesExtractor(GTFSExtractor):
             )
 
             if len(trip_stops) >= 2:
-                coordinates = [
-                    self.transform_to_web_mercator(
-                        float(row["stop_lon"]), float(row["stop_lat"])
-                    )
-                    for _, row in trip_stops.itertuples(index=False)
-                    if pd.notna(row["stop_lat"]) and pd.notna(row["stop_lon"])
-                ]
+                coordinates = []
+                for r in trip_stops.itertuples(index=False):
+                    if pd.notna(r.stop_lat) and pd.notna(r.stop_lon):
+                        x, y = self.transform_to_web_mercator(
+                            float(r.stop_lon), float(r.stop_lat)
+                        )
+                        coordinates.append((x, y))
 
                 if len(coordinates) >= 2:
                     trip_geometries.append(LineString(coordinates))
