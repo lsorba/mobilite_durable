@@ -18,16 +18,16 @@ Classes:
 
 Example:
     # Extract stops from a folder containing multiple GTFS files
-    stops_df = extract_gtfs_stops(str(input_dir), str(output_path), "csv", with_lines=True)
-    stops_df = extract_gtfs_stops(str(input_dir), str(output_path), "geojson", with_lines=True)
-    stops_df = extract_gtfs_stops(str(input_dir), str(output_path), "parquet", with_lines=True)
-    stops_df = extract_gtfs_stops(str(input_dir), str(output_path), "all", with_lines=True)
+    stops_df = extract_gtfs_stops(str(input_dir), str(output_path), "38", "csv", with_lines=True)
+    stops_df = extract_gtfs_stops(str(input_dir), str(output_path), "38", "geojson", with_lines=True)
+    stops_df = extract_gtfs_stops(str(input_dir), str(output_path), "38", "parquet", with_lines=True)
+    stops_df = extract_gtfs_stops(str(input_dir), str(output_path), None, with_lines=True)
 
     # Extract lines from a folder containing multiple GTFS files
-    lines_df = extract_gtfs_lines(str(input_dir), str(output_path), "csv")
-    lines_df = extract_gtfs_lines(str(input_dir), str(output_path), "geojson")
-    lines_df = extract_gtfs_lines(str(input_dir), str(output_path), "parquet")
-    lines_df = extract_gtfs_lines(str(input_dir), str(output_path), "all")
+    lines_df = extract_gtfs_lines(str(input_dir), str(output_path), "38", "csv")
+    lines_df = extract_gtfs_lines(str(input_dir), str(output_path), "38", "geojson")
+    lines_df = extract_gtfs_lines(str(input_dir), str(output_path), "38", "parquet")
+    lines_df = extract_gtfs_lines(str(input_dir), str(output_path), None, "all")
 """
 
 import logging
@@ -88,22 +88,18 @@ class GTFSExtractor:
         Parameters
         - insert_line_info: include line info for stops
         - area: geographic filter selector or path. Accepted values:
-          * None or "all" -> keep everything
+          * None -> keep everything
           * "france" -> use src/data/transportdatagouv/contour-france.geojson
           * any French department code (e.g., "38", "69", "2A", "2B") -> filtered from src/data/transportdatagouv/contour-des-departements.geojson
           * path to a GeoJSON file -> use that polygon/multipolygon
         - exclude_route_types: set of route types to exclude from the GTFS data.
         """
         self.insert_line_info = insert_line_info
-        self.area = (area or "all").lower() if isinstance(area, str) else None
+        self.area = area.lower() if isinstance(area, str) else None
         self._area_polygon = None  # lazily loaded shapely geometry in EPSG:4326
         self._cached_area_gdf = None
-        # Excluded GTFS route types (e.g., 2 = Rail). If None, default to {2}.
-        self.exclude_route_types = (
-            set(exclude_route_types)
-            if exclude_route_types is not None
-            else {GTFSRouteType.RAIL}
-        )
+        # Excluded GTFS route types (e.g., 2 = Rail).
+        self.exclude_route_types = exclude_route_types
 
     @staticmethod
     def prepare_feed(feed):
@@ -197,7 +193,7 @@ class GTFSExtractor:
         if self._cached_area_gdf is not None:
             return self._cached_area_gdf
 
-        if self.area in (None, "all"):
+        if self.area is None:
             return None
 
         # Resolve predefined areas to file path
@@ -222,10 +218,10 @@ class GTFSExtractor:
 
             # If a department code was provided, filter matching department
             if self.area and (self.area.isdigit() or self.area in {"2a", "2b"}):
-                area_code = self.area.upper()
+                area_code = self.area.lower()
                 # The GeoJSON uses codes like "38", "2A", "2B"
                 if "code" in area_gdf.columns:
-                    dept = area_gdf[area_gdf["code"].astype(str).str.upper() == area_code]
+                    dept = area_gdf[area_gdf["code"].astype(str).str.lower() == area_code]
                 else:
                     dept = area_gdf.iloc[0:0]
                 if dept.empty:
@@ -422,7 +418,7 @@ class GTFSStopsExtractor(GTFSExtractor):
         )
 
         # Restrict to area if requested
-        if self.area not in (None, "all"):
+        if self.area is None:
             feed_for_agency = self._filter_feed_to_area(feed_for_agency)
             logger.debug(
                 f"Remaining {len(feed_for_agency.stops)} stops after area filtering for agency '{agency_name}' with id: {agency_id}"
@@ -637,7 +633,7 @@ class GTFSLinesExtractor(GTFSExtractor):
             feed_for_agency = feed
 
         # Restrict to area if requested
-        if self.area not in (None, "all"):
+        if self.area is not None:
             feed_for_agency = self._filter_feed_to_area(feed_for_agency)
 
         # Get dynamic columns for routes
@@ -756,8 +752,10 @@ class GTFSLinesExtractor(GTFSExtractor):
 
             if len(trip_stops) >= 2:
                 coordinates = [
-                    self.transform_to_web_mercator(row["stop_lon"], row["stop_lat"])
-                    for _, row in trip_stops.iterrows()
+                    self.transform_to_web_mercator(
+                        float(row["stop_lon"]), float(row["stop_lat"])
+                    )
+                    for _, row in trip_stops.itertuples(index=False)
                     if pd.notna(row["stop_lat"]) and pd.notna(row["stop_lon"])
                 ]
 
@@ -911,7 +909,7 @@ def _get_web_mercator_transformer() -> Transformer:
 # Convenience functions for backward compatibility and easy usage
 def extract_gtfs_stops(
     gtfs_path: str,
-    output_path: str = None,
+    output_path: str,
     output_format: str = "parquet",
     with_lines: bool = True,
     area: Optional[str] = None,
@@ -925,7 +923,7 @@ def extract_gtfs_stops(
     - output_format: csv|geojson|parquet|all
     - with_lines: whether to enrich stops with served lines
     - area: geographic filter selector or path. Accepted values:
-      * None or "all" -> keep everything
+      * None -> keep everything
       * "france" -> use src/data/transportdatagouv/contour-france.geojson
       * any French department code (e.g., "38", "69", "2A", "2B") -> filtered from src/data/transportdatagouv/contour-des-departements.geojson
       * any file path to a GeoJSON containing a Polygon/MultiPolygon
@@ -941,40 +939,41 @@ def extract_gtfs_stops(
         )
 
     current_date = datetime.now().strftime("%Y-%m-%d")
+    area_output = "all" if area is None else area
     if output_path and not stops.empty:
         fmt = output_format.lower()
         match fmt:
             case "csv":
                 GTFSExporter.to_csv(
                     stops,
-                    output_path + "/" + f"{current_date}_stops_{area}.{fmt}",
+                    output_path + "/" + f"{current_date}_stops_{area_output}.{fmt}",
                 )
             case "geojson":
                 GTFSExporter.to_geojson(
                     stops,
-                    output_path + "/" + f"{current_date}_stops_{area}.{fmt}",
+                    output_path + "/" + f"{current_date}_stops_{area_output}.{fmt}",
                 )
             case "parquet":
                 GTFSExporter.to_parquet(
                     stops,
-                    output_path + "/" + f"{current_date}_stops_{area}.{fmt}",
+                    output_path + "/" + f"{current_date}_stops_{area_output}.{fmt}",
                 )
             case "all":
                 GTFSExporter.to_csv(
-                    stops, output_path + "/" + f"{current_date}_stops_{area}.csv"
+                    stops, output_path + "/" + f"{current_date}_stops_{area_output}.csv"
                 )
                 GTFSExporter.to_geojson(
-                    stops, output_path + "/" + f"{current_date}_stops_{area}.geojson"
+                    stops, output_path + "/" + f"{current_date}_stops_{area_output}.geojson"
                 )
                 GTFSExporter.to_parquet(
-                    stops, output_path + "/" + f"{current_date}_stops_{area}.parquet"
+                    stops, output_path + "/" + f"{current_date}_stops_{area_output}.parquet"
                 )
             case _:
                 logger.warning(
                     f"Unknown output_format '{output_format}', defaulting to Parquet"
                 )
                 GTFSExporter.to_parquet(
-                    stops, output_path + "/" + f"{current_date}_stops_{area}.parquet"
+                    stops, output_path + "/" + f"{current_date}_stops_{area_output}.parquet"
                 )
 
     return stops
@@ -982,7 +981,7 @@ def extract_gtfs_stops(
 
 def extract_gtfs_lines(
     gtfs_path: str,
-    output_path: str = None,
+    output_path: str,
     output_format: str = "parquet",
     area: Optional[str] = None,
     exclude_route_types: Optional[set[int]] = None,
@@ -1006,33 +1005,34 @@ def extract_gtfs_lines(
         )
 
     current_date = datetime.now().strftime("%Y-%m-%d")
+    area_output = "all" if area is None else area
     if output_path and not lines.empty:
         fmt = output_format.lower()
         match fmt:
             case "csv":
                 GTFSExporter.to_csv(
                     lines,
-                    output_path + "/" + f"{current_date}_lines_{area}.{fmt}",
+                    output_path + "/" + f"{current_date}_lines_{area_output}.{fmt}",
                 )
             case "geojson":
                 GTFSExporter.to_geojson(
                     lines,
-                    output_path + "/" + f"{current_date}_lines_{area}.{fmt}",
+                    output_path + "/" + f"{current_date}_lines_{area_output}.{fmt}",
                 )
             case "parquet":
                 GTFSExporter.to_parquet(
                     lines,
-                    output_path + "/" + f"{current_date}_lines_{area}.{fmt}",
+                    output_path + "/" + f"{current_date}_lines_{area_output}.{fmt}",
                 )
             case "all":
                 GTFSExporter.to_csv(
-                    lines, output_path + "/" + f"{current_date}_lines_{area}.csv"
+                    lines, output_path + "/" + f"{current_date}_lines_{area_output}.csv"
                 )
                 GTFSExporter.to_geojson(
-                    lines, output_path + "/" + f"{current_date}_lines_{area}.geojson"
+                    lines, output_path + "/" + f"{current_date}_lines_{area_output}.geojson"
                 )
                 GTFSExporter.to_parquet(
-                    lines, output_path + "/" + f"{current_date}_lines_{area}.parquet"
+                    lines, output_path + "/" + f"{current_date}_lines_{area_output}.parquet"
                 )
             case _:
                 logger.warning(
@@ -1040,7 +1040,7 @@ def extract_gtfs_lines(
                 )
                 GTFSExporter.to_parquet(
                     lines,
-                    output_path + "/" + f"{current_date}_lines_{area}.parquet",
+                    output_path + "/" + f"{current_date}_lines_{area_output}.parquet",
                 )
     return lines
 
@@ -1063,7 +1063,7 @@ def main(**kwargs):
         str(output_folder),
         "parquet",
         with_lines=True,
-        area="all",
+        area=None,
         exclude_route_types={GTFSRouteType.RAIL},
     )
 
@@ -1077,7 +1077,7 @@ def main(**kwargs):
         str(input_dir),
         str(output_folder),
         "parquet",
-        area="all",
+        area=None,
         exclude_route_types={GTFSRouteType.RAIL},
     )
 
