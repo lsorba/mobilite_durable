@@ -32,12 +32,13 @@ Example:
 
 import logging
 import os
+from concurrent.futures import ProcessPoolExecutor, as_completed
 from datetime import datetime
 from enum import IntEnum
 from functools import lru_cache
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Dict, List, Optional, Union
+from typing import Dict, List, Optional
 
 import geopandas as gpd
 import gtfs_kit as gk
@@ -142,11 +143,6 @@ class GTFSExtractor:
         return columns
 
     @staticmethod
-    def create_unique_id(agency_id: str, item_id: str) -> str:
-        """Create unique identifier combining agency and item ID"""
-        return f"{agency_id}_{item_id}"
-
-    @staticmethod
     def get_trip_route_mapping(feed: gk.Feed) -> pd.DataFrame:
         """Get mapping between trips and routes with line information"""
         trips = feed.trips[["trip_id", "route_id"]]
@@ -155,7 +151,7 @@ class GTFSExtractor:
         return trips.merge(routes, on="route_id", how="left")
 
     @staticmethod
-    def safe_list_to_string(lst: Union[List, str, None]) -> str:
+    def safe_list_to_string(lst: List | str | None) -> str:
         """Safely convert list to comma-separated string"""
         if isinstance(lst, list):
             return ",".join(str(item) for item in lst)
@@ -264,7 +260,7 @@ class GTFSExtractor:
             routes=routes,
         )
 
-    def _filter_feed_to_area(self, feed: gk.Feed) -> gk.Feed:
+    def _filter_feed_to_area(self, feed: gk.Feed) -> gk.Feed | SimpleNamespace:
         """Restrict a GTFS feed to the selected area polygon.
 
         Strategy:
@@ -329,21 +325,24 @@ class GTFSExtractor:
         if df.empty:
             return df
 
-        logger.info(f"Cleaning stops dataframe with {len(df)} rows")
+        initial_size = len(df)
+        logger.debug(f"Cleaning stops dataframe with {initial_size} rows")
 
         # Remove rows with missing essential data
-        df_clean = df.dropna(subset=["stop_id", "stop_name", "stop_lat", "stop_lon"])
+        df_clean = df.dropna(subset=["stop_id", "stop_name", "geometry"])
 
-        # Remove duplicates based on stop_unique_id
-        df_clean = df_clean.drop_duplicates(subset=["stop_unique_id"])
+        # Remove duplicates with a defensive approach
+        # if {"agency_id", "agency_name", "stop_id"}.issubset(df_clean.columns):
+        #     df_clean = df_clean.drop_duplicates(subset=["agency_id", "agency_name", "stop_id"])
 
         # Remove stops with invalid coordinates
-        df_clean = df_clean[
-            (df_clean["stop_lat"] >= -90)
-            & (df_clean["stop_lat"] <= 90)
-            & (df_clean["stop_lon"] >= -180)
-            & (df_clean["stop_lon"] <= 180)
-        ]
+        if {"stop_lat", "stop_lon"}.issubset(df_clean.columns):
+            df_clean = df_clean[
+                (df_clean["stop_lat"] >= -90)
+                & (df_clean["stop_lat"] <= 90)
+                & (df_clean["stop_lon"] >= -180)
+                & (df_clean["stop_lon"] <= 180)
+            ]
 
         # Check for missing columns and add them with default values
         for col in GTFSStopsExtractor.stops_cols:
@@ -351,7 +350,9 @@ class GTFSExtractor:
                 df_clean[col] = None
         df_clean = df_clean[GTFSStopsExtractor.stops_cols]
 
-        logger.info(f"Cleaned stops dataframe: {len(df_clean)} rows remaining")
+        logger.info(
+            f"Cleaned stops dataframe: {initial_size - len(df_clean)} removed. {len(df_clean)} rows remaining"
+        )
         return df_clean
 
     @staticmethod
@@ -360,13 +361,15 @@ class GTFSExtractor:
         if df.empty:
             return df
 
-        logger.info(f"Cleaning lines dataframe with {len(df)} rows")
+        initial_size = len(df)
+        logger.debug(f"Cleaning lines dataframe with {initial_size} rows")
 
         # Remove rows with missing essential data
-        df_clean = df.dropna(subset=["route_id", "route_short_name"])
+        df_clean = df.dropna(subset=["route_id", "route_name", "geometry", "stop_count"])
 
-        # Remove duplicates based on line_unique_id
-        df_clean = df_clean.drop_duplicates(subset=["line_unique_id"])
+        # Remove duplicates with a defensive approach
+        # if {"agency_id", "agency_name", "route_id"}.issubset(df_clean.columns):
+        #     df_clean = df_clean.drop_duplicates(subset=["agency_id", "agency_name", "route_id"])
 
         # Remove lines with no geometry or stops
         df_clean = df_clean[(df_clean["geometry"].notna()) & (df_clean["stop_count"] > 0)]
@@ -377,23 +380,29 @@ class GTFSExtractor:
                 df_clean[col] = None
         df_clean = df_clean[GTFSLinesExtractor.lines_cols]
 
-        logger.info(f"Cleaned lines dataframe: {len(df_clean)} rows remaining")
+        logger.info(
+            f"Cleaned lines dataframe: {initial_size - len(df_clean)} removed. {len(df_clean)} rows remaining"
+        )
         return df_clean
+
+    @staticmethod
+    def _calculate_nb_workers(file_count: int, hard_cap: int = 8) -> int:
+        # Use all CPUs minus one, but not more than the number of files, and hard cap it.
+        base = max(1, os.cpu_count() - 1)
+        return max(1, min(file_count, base, hard_cap))
 
 
 class GTFSStopsExtractor(GTFSExtractor):
     """Extractor for GTFS stops with line information"""
 
     stops_cols = [
-        "stop_unique_id",
         "agency_id",
         "agency_name",
         "stop_id",
         "stop_name",
         "stop_code",
         "stop_desc",
-        "stop_lat",
-        "stop_lon",
+        "stop_lines",
         "geometry",
     ]
 
@@ -472,9 +481,6 @@ class GTFSStopsExtractor(GTFSExtractor):
         # Add agency information
         stops.loc[:, "agency_id"] = agency_id
         stops.loc[:, "agency_name"] = agency_name
-        stops.loc[:, "stop_unique_id"] = stops["stop_id"].apply(
-            lambda x: self.create_unique_id(agency_id, x)
-        )
 
         # Add geometry column (Point in EPSG:3857 - Web Mercator)
         stops.loc[:, "geometry"] = stops.apply(
@@ -512,8 +518,12 @@ class GTFSStopsExtractor(GTFSExtractor):
                 lambda x: [
                     {
                         "line_id": row["route_id"],
-                        "line_name_short": row["route_short_name"],
-                        "line_name_long": row["route_long_name"],
+                        "line_name": (
+                            row["route_short_name"]
+                            if pd.notna(row["route_short_name"])
+                            and str(row["route_short_name"]).strip() != ""
+                            else row["route_long_name"]
+                        ),
                     }
                     for _, row in x.iterrows()
                 ],
@@ -583,13 +593,44 @@ class GTFSStopsExtractor(GTFSExtractor):
         gtfs_files = cls.find_gtfs_files(folder_path)
 
         all_stops = []
-        for gtfs_file in gtfs_files:
-            logger.info(f"Processing GTFS file: {gtfs_file}")
-            stops = cls.extract_from_file(
-                gtfs_file, with_lines, area=area, exclude_route_types=exclude_route_types
+
+        if not gtfs_files:
+            return pd.DataFrame()
+
+        workers = GTFSExtractor._calculate_nb_workers(len(gtfs_files))
+        if workers <= 1:
+            for gtfs_file in gtfs_files:
+                logger.info(f"Processing GTFS file: {gtfs_file}")
+                stops = cls.extract_from_file(
+                    gtfs_file, with_lines, area=area, exclude_route_types=exclude_route_types
+                )
+                if not stops.empty:
+                    all_stops.append(stops)
+        else:
+            logger.info(
+                f"Processing {len(gtfs_files)} GTFS files in parallel with {workers} workers"
             )
-            if not stops.empty:
-                all_stops.append(stops)
+            with ProcessPoolExecutor(max_workers=workers) as executor:
+                futures = {
+                    executor.submit(
+                        cls.extract_from_file,
+                        gtfs_file,
+                        with_lines,
+                        area,
+                        exclude_route_types,
+                    ): gtfs_file
+                    for gtfs_file in gtfs_files
+                }
+                for future in as_completed(futures):
+                    gtfs_file = futures[future]
+                    try:
+                        stops = future.result()
+                        if stops is not None and not stops.empty:
+                            all_stops.append(stops)
+                    except Exception as e:
+                        logger.error(
+                            f"Parallel processing failed for {gtfs_file}: {type(e).__name__} {e}"
+                        )
 
         if all_stops:
             result = cls.safe_concat_dataframes(all_stops)
@@ -602,12 +643,10 @@ class GTFSLinesExtractor(GTFSExtractor):
     """Extractor for GTFS lines with geometry and stop information"""
 
     lines_cols = [
-        "line_unique_id",
         "agency_id",
         "agency_name",
         "route_id",
-        "route_short_name",
-        "route_long_name",
+        "route_name",
         "route_type",
         "route_color",
         "route_text_color",
@@ -670,9 +709,6 @@ class GTFSLinesExtractor(GTFSExtractor):
         # Add agency information
         routes.loc[:, "agency_id"] = agency_id
         routes.loc[:, "agency_name"] = agency_name
-        routes.loc[:, "line_unique_id"] = routes["route_id"].apply(
-            lambda x: self.create_unique_id(agency_id, x)
-        )
 
         # Process each route to get geometry and stops
         lines_data = []
@@ -722,10 +758,13 @@ class GTFSLinesExtractor(GTFSExtractor):
 
         # Prepare line data
         line_data = {
-            "line_unique_id": route["line_unique_id"],
             "route_id": route_id,
-            "route_short_name": route["route_short_name"],
-            "route_long_name": route["route_long_name"],
+            "route_name": (
+                route["route_short_name"]
+                if pd.notna(route["route_short_name"])
+                and str(route["route_short_name"]).strip() != ""
+                else route["route_long_name"]
+            ),
             "route_type": route["route_type"],
             "agency_id": route["agency_id"],
             "agency_name": route["agency_name"],
@@ -743,7 +782,7 @@ class GTFSLinesExtractor(GTFSExtractor):
 
     def _create_route_geometry(
         self, route_stop_times: pd.DataFrame, trip_ids: List[str]
-    ) -> Optional[Union[LineString, MultiLineString]]:
+    ) -> Optional[LineString | MultiLineString]:
         """Create geometry for a route from trip stop times"""
         trip_geometries = []
 
@@ -817,13 +856,42 @@ class GTFSLinesExtractor(GTFSExtractor):
         gtfs_files = cls.find_gtfs_files(folder_path)
 
         all_lines = []
-        for gtfs_file in gtfs_files:
-            logger.info(f"Processing GTFS file: {gtfs_file}")
-            lines = cls.extract_from_file(
-                gtfs_file, area=area, exclude_route_types=exclude_route_types
+        if not gtfs_files:
+            return pd.DataFrame()
+
+        workers = GTFSExtractor._calculate_nb_workers(len(gtfs_files))
+        if workers <= 1:
+            for gtfs_file in gtfs_files:
+                logger.info(f"Processing GTFS file: {gtfs_file}")
+                lines = cls.extract_from_file(
+                    gtfs_file, area=area, exclude_route_types=exclude_route_types
+                )
+                if not lines.empty:
+                    all_lines.append(lines)
+        else:
+            logger.info(
+                f"Processing {len(gtfs_files)} GTFS files in parallel with {workers} workers"
             )
-            if not lines.empty:
-                all_lines.append(lines)
+            with ProcessPoolExecutor(max_workers=workers) as executor:
+                futures = {
+                    executor.submit(
+                        cls.extract_from_file,
+                        gtfs_file,
+                        area,
+                        exclude_route_types,
+                    ): gtfs_file
+                    for gtfs_file in gtfs_files
+                }
+                for future in as_completed(futures):
+                    gtfs_file = futures[future]
+                    try:
+                        lines = future.result()
+                        if lines is not None and not lines.empty:
+                            all_lines.append(lines)
+                    except Exception as e:
+                        logger.error(
+                            f"Parallel processing failed for {gtfs_file}: {type(e).__name__} {e}"
+                        )
 
         if all_lines:
             result = cls.safe_concat_dataframes(all_lines)
