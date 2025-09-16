@@ -248,11 +248,13 @@ class GTFSExtractor:
         If stop_times/trips/routes are not provided,
         they are initialised as empty.
         """
-        if stop_times is None or trips is None or routes is None:
-            empty = slice(0, 0)
-            stop_times = stop_times if stop_times is not None else feed.stop_times.iloc[empty]
-            trips = trips if trips is not None else feed.trips.iloc[empty]
-            routes = routes if routes is not None else feed.routes.iloc[empty]
+        empty = slice(0, 0)
+        if stop_times is None:
+            stop_times = feed.stop_times.iloc[empty]
+        if trips is None:
+            trips = feed.trips.iloc[empty]
+        if routes is None:
+            routes = feed.routes.iloc[empty]
 
         return SimpleNamespace(
             agency=getattr(feed, "agency", None),
