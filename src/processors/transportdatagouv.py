@@ -348,9 +348,6 @@ class TransportDataGouvProcessor(ProcessorMixin, DownloaderMixin):
 
 
 def main(**kwargs):
-    TransportDataGouvProcessor.test_limit = None  # Defaults to None
-    TransportDataGouvProcessor.force_download = False  # Defaults to False
-    TransportDataGouvProcessor.resource_validity_days_threshold = 90  # Defaults to 365
     logger.info("Running the full pipeline")
     TransportDataGouvProcessor.run_all(
         reload_pipeline=TransportDataGouvProcessor.reload_pipeline
